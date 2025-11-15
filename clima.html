@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Clima de Municipios de Coahuila</title>
+<style>
+    body { font-family: Arial; background:#eef2f3; padding:20px; }
+    #card { background:white; padding:20px; border-radius:10px; margin-top:20px; }
+    label { font-weight:bold; }
+    button { padding:10px 15px; margin-left:10px; cursor:pointer; }
+    canvas { margin-top:20px; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+
+<h1>Clima por Municipio (Coahuila)</h1>
+
+<label>Municipio:</label>
+<input type="text" id="municipio" placeholder="Ej: Saltillo, Torreón, Monclova">
+<button onclick="obtenerClima()">Consultar</button>
+<button onclick="exportarExcel()">Exportar a Excel</button>
+
+<div id="card">
+    <canvas id="graficaClima"></canvas>
+</div>
+
+<script>
+let datosClima = null; // Guardar datos para exportar
+
+// -----------------------------
+// 1. Buscar coordenadas del municipio
+// -----------------------------
+async function buscarCoordenadas(municipio) {
+    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${municipio}&count=1&language=es&format=json`;
+    const resp = await fetch(url);
+    const datos = await resp.json();
+    if (!datos.results || datos.results.length === 0) {
+        throw new Error("Municipio no encontrado");
+    }
+    return {
+        nombre: datos.results[0].name,
+        lat: datos.results[0].latitude,
+        lon: datos.results[0].longitude
+    };
+}
+
+// -----------------------------
+// 2. Obtener clima y mostrar gráfica
+// -----------------------------
+async function obtenerClima() {
+    const muni = document.getElementById("municipio").value.trim();
+    if (!muni) { alert("Escribe un municipio"); return; }
+
+    try {
+        const { nombre, lat, lon } = await buscarCoordenadas(muni);
+        const urlClima = `
+            https://api.open-meteo.com/v1/forecast?
+            latitude=${lat}&longitude=${lon}
+            &daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max
+            &current_weather=true
+            &timezone=auto
+        `.replace(/\s+/g, '');
+
+        const resp = await fetch(urlClima);
+        const clima = await resp.json();
+
+        // Datos actuales
+        const tempActual = clima.current_weather.temperature;
+        const vientoActual = clima.current_weather.windspeed;
+
+        // Datos diarios
+        const dias = clima.daily.time;
+        const tmin = clima.daily.temperature_2m_min;
+        const tmax = clima.daily.temperature_2m_max;
+        const lluvia = clima.daily.precipitation_probability_max;
+        const viento = clima.daily.wind_speed_10m_max;
+
+        // Guardar datos globales para Excel
+        datosClima = {
+            nombre, tempActual, vientoActual, dias, tmin, tmax, lluvia, viento
+        };
+
+        // Mostrar tarjeta
+        const cardHTML = `
+            <h2>${nombre}</h2>
+            <p><strong>Clima actual:</strong> ${tempActual}°C, viento ${vientoActual} km/h</p>
+            <p><strong>Pronóstico de hoy:</strong></p>
+            <ul>
+                <li>Temperatura mínima: ${tmin[0]}°C</li>
+                <li>Temperatura máxima: ${tmax[0]}°C</li>
+                <li>Probabilidad de lluvia: ${lluvia[0]}%</li>
+                <li>Viento máximo: ${viento[0]} km/h</li>
+            </ul>
+            <canvas id="graficaClima"></canvas>
+        `;
+        document.getElementById("card").innerHTML = cardHTML;
+
+        // Graficar 7 días
+        const ctx = document.getElementById('graficaClima').getContext('2d');
+        if (window.grafica) window.grafica.destroy();
+        window.grafica = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: dias,
+                datasets: [
+                    { label: 'Temp. mínima (°C)', data: tmin, borderColor:'#3498db', backgroundColor:'#3498db33', tension:0.4 },
+                    { label: 'Temp. máxima (°C)', data: tmax, borderColor:'#e74c3c', backgroundColor:'#e74c3c33', tension:0.4 },
+                    { label: 'Lluvia (%)', data: lluvia, borderColor:'#2980b9', backgroundColor:'#2980b933', tension:0.4, yAxisID:'y2' },
+                    { label: 'Viento (km/h)', data: viento, borderColor:'#27ae60', backgroundColor:'#27ae6033', tension:0.4, yAxisID:'y3' }
+                ]
+            },
+            options: {
+                responsive:true,
+                interaction:{ mode:'index', intersect:false },
+                stacked:false,
+                plugins:{ title:{ display:true, text:`Pronóstico de 7 días para ${nombre}` } },
+                scales:{
+                    y:{ type:'linear', position:'left', title:{ display:true, text:'Temperatura °C' } },
+                    y2:{ type:'linear', position:'right', title:{ display:true, text:'Lluvia %' }, grid:{ drawOnChartArea:false } },
+                    y3:{ type:'linear', position:'right', title:{ display:true, text:'Viento km/h' }, grid:{ drawOnChartArea:false }, offset:true }
+                }
+            }
+        });
+
+    } catch(error) {
+        document.getElementById("card").innerHTML = "<p style='color:red;'>Error: No se encontró el municipio o la API falló.</p>";
+        console.error(error);
+    }
+}
+
+// -----------------------------
+// 3. Exportar datos a Excel
+// -----------------------------
+function exportarExcel() {
+    if (!datosClima) {
+        alert("Primero consulta un municipio.");
+        return;
+    }
+
+    const wsData = [
+        ['Municipio', datosClima.nombre],
+        ['Temperatura actual (°C)', datosClima.tempActual],
+        ['Viento actual (km/h)', datosClima.vientoActual],
+        [],
+        ['Fecha', 'Temp. mínima (°C)', 'Temp. máxima (°C)', 'Lluvia (%)', 'Viento (km/h)']
+    ];
+
+    for (let i=0; i<datosClima.dias.length; i++) {
+        wsData.push([
+            datosClima.dias[i],
+            datosClima.tmin[i],
+            datosClima.tmax[i],
+            datosClima.lluvia[i],
+            datosClima.viento[i]
+        ]);
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Clima');
+
+    XLSX.writeFile(wb, `${datosClima.nombre}_Clima.xlsx`);
+}
+</script>
+
+</body>
+</html>
